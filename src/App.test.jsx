@@ -108,4 +108,26 @@ describe('React 编辑与后端结果归属', () => {
     expect(payload.premises).toEqual(['P']);
     expect(payload.steps[3].formula).toBe('Q');
   });
+
+  it('载入析取消去两支例时提交两支假设标签，而不是把前提当作分支', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: '载入析取消去两支例' }));
+    fireEvent.click(screen.getByRole('button', { name: '提交后端验算' }));
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    const payload = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(payload.premises).toEqual(['P | Q', 'P -> R', 'Q -> R']);
+    expect(payload.conclusion).toBe('R');
+
+    const lastStep = payload.steps.at(-1);
+    expect(lastStep).toMatchObject({
+      rule: 'or_elim',
+      refs: ['1', '6', '9'],
+      branches: ['a', 'b']
+    });
+    // 第二、三个引用必须是分别关闭假设 a、b 后得到的蕴含引入步骤。
+    expect(payload.steps[5]).toMatchObject({ rule: 'impl_intro', label: 'a' });
+    expect(payload.steps[8]).toMatchObject({ rule: 'impl_intro', label: 'b' });
+  });
 });

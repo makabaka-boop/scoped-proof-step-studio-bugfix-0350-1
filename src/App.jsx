@@ -1,13 +1,19 @@
 import { useState } from 'react';
 
 const RULES = [
-  { value: 'premise', label: '前提', needsRefs: false, needsLabel: false },
-  { value: 'assumption', label: '开设假设', needsRefs: false, needsLabel: true },
-  { value: 'and_intro', label: '合取引入 ∧I', needsRefs: true, needsLabel: false },
-  { value: 'and_elim', label: '合取消去 ∧E', needsRefs: true, needsLabel: false },
-  { value: 'impl_elim', label: '蕴含消去 →E', needsRefs: true, needsLabel: false },
-  { value: 'impl_intro', label: '蕴含引入 →I', needsRefs: true, needsLabel: true },
-  { value: 'or_elim', label: '析取消去 ∨E（两支已关闭证明）', needsRefs: true, needsLabel: false }
+  { value: 'premise', label: '前提', needsRefs: false, needsLabel: false, needsBranches: false },
+  { value: 'assumption', label: '开设假设', needsRefs: false, needsLabel: true, needsBranches: false },
+  { value: 'and_intro', label: '合取引入 ∧I', needsRefs: true, needsLabel: false, needsBranches: false },
+  { value: 'and_elim', label: '合取消去 ∧E', needsRefs: true, needsLabel: false, needsBranches: false },
+  { value: 'impl_elim', label: '蕴含消去 →E', needsRefs: true, needsLabel: false, needsBranches: false },
+  { value: 'impl_intro', label: '蕴含引入 →I', needsRefs: true, needsLabel: true, needsBranches: false },
+  {
+    value: 'or_elim',
+    label: '析取消去 ∨E（两支已关闭证明）',
+    needsRefs: true,
+    needsLabel: false,
+    needsBranches: true
+  }
 ];
 
 const RULE_NAMES = Object.fromEntries(RULES.map((rule) => [rule.value, rule.label]));
@@ -35,12 +41,30 @@ const implicationExample = {
   ]
 };
 
+const orElimExample = {
+  premises: ['P | Q', 'P -> R', 'Q -> R'],
+  conclusion: 'R',
+  steps: [
+    { id: '1', formula: 'P | Q', rule: 'premise', refs: [], label: '', branches: [] },
+    { id: '2', formula: 'P -> R', rule: 'premise', refs: [], label: '', branches: [] },
+    { id: '3', formula: 'Q -> R', rule: 'premise', refs: [], label: '', branches: [] },
+    { id: '4', formula: 'P', rule: 'assumption', refs: [], label: 'a', branches: [] },
+    { id: '5', formula: 'R', rule: 'impl_elim', refs: ['2', '4'], label: '', branches: [] },
+    { id: '6', formula: 'P -> R', rule: 'impl_intro', refs: ['5'], label: 'a', branches: [] },
+    { id: '7', formula: 'Q', rule: 'assumption', refs: [], label: 'b', branches: [] },
+    { id: '8', formula: 'R', rule: 'impl_elim', refs: ['3', '7'], label: '', branches: [] },
+    { id: '9', formula: 'Q -> R', rule: 'impl_intro', refs: ['8'], label: 'b', branches: [] },
+    { id: '10', formula: 'R', rule: 'or_elim', refs: ['1', '6', '9'], label: '', branches: ['a', 'b'] }
+  ]
+};
+
 const emptyStep = (index) => ({
   id: String(index + 1),
   formula: '',
   rule: 'premise',
   refs: [],
-  label: ''
+  label: '',
+  branches: []
 });
 
 function uid() {
@@ -55,7 +79,8 @@ function normalizeStep(step) {
     formula: String(step.formula ?? ''),
     rule: String(step.rule ?? 'premise'),
     refs: Array.isArray(step.refs) ? step.refs.map(String) : [],
-    label: String(step.label ?? '')
+    label: String(step.label ?? ''),
+    branches: Array.isArray(step.branches) ? step.branches.map(String) : []
   };
 }
 
@@ -75,7 +100,8 @@ export default function App() {
         formula: step.formula.trim(),
         rule: step.rule,
         refs: step.refs.map((ref) => ref.trim()).filter(Boolean),
-        label: step.label.trim()
+        label: step.label.trim(),
+        branches: (step.branches || []).map((ref) => ref.trim()).filter(Boolean)
       }))
     };
   }
@@ -168,6 +194,9 @@ export default function App() {
           <button type="button" className="secondary" onClick={() => loadExample(implicationExample)}>
             载入蕴含引入例
           </button>
+          <button type="button" className="secondary" onClick={() => loadExample(orElimExample)}>
+            载入析取消去两支例
+          </button>
         </div>
       </section>
 
@@ -230,6 +259,7 @@ export default function App() {
             <span>规则</span>
             <span>引用（逗号分隔）</span>
             <span>假设标签</span>
+            <span>两支标签（∨E）</span>
             <span>操作</span>
           </div>
           {steps.map((step, index) => {
@@ -246,7 +276,12 @@ export default function App() {
                 <select
                   aria-label={`第 ${index + 1} 步规则`}
                   value={step.rule}
-                  onChange={(event) => updateStep(step.id, { rule: event.target.value })}
+                  onChange={(event) =>
+                    updateStep(step.id, {
+                      rule: event.target.value,
+                      branches: event.target.value === 'or_elim' ? step.branches : []
+                    })
+                  }
                 >
                   {RULES.map((rule) => (
                     <option key={rule.value} value={rule.value}>{rule.label}</option>
@@ -272,6 +307,20 @@ export default function App() {
                   disabled={!selectedRule.needsLabel}
                   onChange={(event) => updateStep(step.id, { label: event.target.value })}
                   placeholder="h1"
+                />
+                <input
+                  aria-label={`第 ${index + 1} 步两支标签`}
+                  value={step.branches.join(', ')}
+                  disabled={!selectedRule.needsBranches}
+                  onChange={(event) =>
+                    updateStep(step.id, {
+                      branches: event.target.value
+                        .split(',')
+                        .map((item) => item.trim())
+                        .filter(Boolean)
+                    })
+                  }
+                  placeholder="a, b"
                 />
                 <div className="step-actions">
                   <button type="button" className="icon-button" onClick={() => moveStep(index, -1)}>↑</button>

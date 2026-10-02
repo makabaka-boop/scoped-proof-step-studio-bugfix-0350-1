@@ -267,6 +267,217 @@ describe('错误消去与第一处错误', () => {
   });
 });
 
+describe('析取消去与两支分支', () => {
+  // P | Q, P -> R, Q -> R 为给定前提；但学生必须分别开设假设 P、Q 推出 R，
+  // 用蕴含引入关闭两支后，才能在顶层使用析取消去。
+  function closedBranchProof(overrides = {}) {
+    return {
+      premises: ['P | Q', 'P -> R', 'Q -> R'],
+      conclusion: 'R',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'P -> R', rule: 'premise', refs: [] },
+        { id: '3', formula: 'Q -> R', rule: 'premise', refs: [] },
+        { id: '4', formula: 'P', rule: 'assumption', refs: [], label: 'a' },
+        { id: '5', formula: 'R', rule: 'impl_elim', refs: ['2', '4'] },
+        { id: '6', formula: 'P -> R', rule: 'impl_intro', refs: ['5'], label: 'a' },
+        { id: '7', formula: 'Q', rule: 'assumption', refs: [], label: 'b' },
+        { id: '8', formula: 'R', rule: 'impl_elim', refs: ['3', '7'] },
+        { id: '9', formula: 'Q -> R', rule: 'impl_intro', refs: ['8'], label: 'b' },
+        { id: '10', formula: 'R', rule: 'or_elim', refs: ['1', '6', '9'], branches: ['a', 'b'] }
+      ],
+      ...overrides
+    };
+  }
+
+  it('接受两个假设分支分别关闭后在顶层完成的析取消去', () => {
+    const result = verifyProof(closedBranchProof());
+    expect(result).toMatchObject({ valid: true, code: 'VALID_PROOF' });
+    const last = result.derivations.at(-1);
+    expect(last.basis).toContain('析取消去');
+    expect(last.basis).toContain('两支假设 a、b');
+    expect(last.branches).toEqual(['a', 'b']);
+  });
+
+  it('拒绝把普通蕴含前提直接当成两支证明', () => {
+    const result = verifyProof({
+      premises: ['P | Q', 'P -> R', 'Q -> R'],
+      conclusion: 'R',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'P -> R', rule: 'premise', refs: [] },
+        { id: '3', formula: 'Q -> R', rule: 'premise', refs: [] },
+        { id: '4', formula: 'R', rule: 'or_elim', refs: ['1', '2', '3'] }
+      ]
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe('OR_ELIM_REQUIRES_CLOSED_BRANCH');
+    expect(result.error).toContain('两支证明');
+  });
+
+  it('即使引用顺序把两支写成 6、9 的形状，缺少假设关闭也不接受', () => {
+    const result = verifyProof({
+      premises: ['P | Q', 'P -> R', 'Q -> R'],
+      conclusion: 'R',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'P -> R', rule: 'premise', refs: [] },
+        { id: '3', formula: 'Q -> R', rule: 'premise', refs: [] },
+        { id: '4', formula: 'R', rule: 'or_elim', refs: ['1', '3', '2'] }
+      ]
+    });
+
+    expect(result.code).toBe('OR_ELIM_REQUIRES_CLOSED_BRANCH');
+  });
+
+  it('阻止外层假设仍开启时得到的析取消去结论在关闭后被引用', () => {
+    // 两支都依赖外层假设 T；析取消去只能得到“T 之下”的 R，关闭 T 后不得再引用。
+    const result = verifyProof({
+      premises: ['P | Q', 'T & P -> R', 'T & Q -> R'],
+      conclusion: 'R',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'T & P -> R', rule: 'premise', refs: [] },
+        { id: '3', formula: 'T & Q -> R', rule: 'premise', refs: [] },
+        { id: '4', formula: 'T', rule: 'assumption', refs: [], label: 'h0' },
+        { id: '5', formula: 'P', rule: 'assumption', refs: [], label: 'a' },
+        { id: '6', formula: 'T & P', rule: 'and_intro', refs: ['4', '5'] },
+        { id: '7', formula: 'R', rule: 'impl_elim', refs: ['2', '6'] },
+        { id: '8', formula: 'P -> R', rule: 'impl_intro', refs: ['7'], label: 'a' },
+        { id: '9', formula: 'Q', rule: 'assumption', refs: [], label: 'b' },
+        { id: '10', formula: 'T & Q', rule: 'and_intro', refs: ['4', '9'] },
+        { id: '11', formula: 'R', rule: 'impl_elim', refs: ['3', '10'] },
+        { id: '12', formula: 'Q -> R', rule: 'impl_intro', refs: ['11'], label: 'b' },
+        { id: '13', formula: 'R', rule: 'or_elim', refs: ['1', '8', '12'], branches: ['a', 'b'] },
+        { id: '14', formula: 'T -> T', rule: 'impl_intro', refs: ['4'], label: 'h0' },
+        { id: '15', formula: 'R & R', rule: 'and_intro', refs: ['13', '13'] }
+      ]
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe('SCOPE_VIOLATION');
+    expect(result.error).toContain('步骤 15');
+    expect(result.error).toContain('已关闭假设“h0”');
+    // 语义检查独立报告该结论确有反例，绝不因错误证明被放行。
+    expect(result.semantics.entailed).toBe(false);
+    expect(result.semantics.counterexamples.length).toBeGreaterThan(0);
+  });
+
+  it('同一外层假设内完成析取消去后，可合法关闭外层并引用其结论', () => {
+    const result = verifyProof({
+      premises: ['P | Q'],
+      conclusion: 'U -> U & U',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'U', rule: 'assumption', refs: [], label: 'h0' },
+        { id: '3', formula: 'P', rule: 'assumption', refs: [], label: 'a' },
+        { id: '4', formula: 'U & U', rule: 'and_intro', refs: ['2', '2'] },
+        { id: '5', formula: 'P -> U & U', rule: 'impl_intro', refs: ['4'], label: 'a' },
+        { id: '6', formula: 'Q', rule: 'assumption', refs: [], label: 'b' },
+        { id: '7', formula: 'U & U', rule: 'and_intro', refs: ['2', '2'] },
+        { id: '8', formula: 'Q -> U & U', rule: 'impl_intro', refs: ['7'], label: 'b' },
+        { id: '9', formula: 'U & U', rule: 'or_elim', refs: ['1', '5', '8'], branches: ['a', 'b'] },
+        { id: '10', formula: 'U -> U & U', rule: 'impl_intro', refs: ['9'], label: 'h0' }
+      ]
+    });
+
+    expect(result).toMatchObject({ valid: true, code: 'VALID_PROOF' });
+  });
+
+  it('拒绝两支标签相同的析取消去', () => {
+    const proof = closedBranchProof();
+    proof.steps[9] = {
+      id: '10',
+      formula: 'R',
+      rule: 'or_elim',
+      refs: ['1', '6', '6'],
+      branches: ['a', 'a']
+    };
+    const result = verifyProof(proof);
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe('OR_ELIM_BRANCH_SCOPE');
+  });
+
+  it('拒绝两支假设与析取式左右析取支不匹配', () => {
+    // 第二支关闭的假设仍是 P，而析取式右侧是 Q。
+    const result = verifyProof({
+      premises: ['P | Q', 'P -> R'],
+      conclusion: 'R',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'P -> R', rule: 'premise', refs: [] },
+        { id: '3', formula: 'P', rule: 'assumption', refs: [], label: 'a' },
+        { id: '4', formula: 'R', rule: 'impl_elim', refs: ['2', '3'] },
+        { id: '5', formula: 'P -> R', rule: 'impl_intro', refs: ['4'], label: 'a' },
+        { id: '6', formula: 'P', rule: 'assumption', refs: [], label: 'b' },
+        { id: '7', formula: 'R', rule: 'impl_elim', refs: ['2', '6'] },
+        { id: '8', formula: 'P -> R', rule: 'impl_intro', refs: ['7'], label: 'b' },
+        { id: '9', formula: 'R', rule: 'or_elim', refs: ['1', '5', '8'], branches: ['a', 'b'] }
+      ]
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('两支假设与析取式不匹配');
+  });
+
+  it('拒绝两支推出不同结论的析取消去', () => {
+    const result = verifyProof({
+      premises: ['P | Q', 'P -> R', 'Q -> S'],
+      conclusion: 'R',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'P -> R', rule: 'premise', refs: [] },
+        { id: '3', formula: 'Q -> S', rule: 'premise', refs: [] },
+        { id: '4', formula: 'P', rule: 'assumption', refs: [], label: 'a' },
+        { id: '5', formula: 'R', rule: 'impl_elim', refs: ['2', '4'] },
+        { id: '6', formula: 'P -> R', rule: 'impl_intro', refs: ['5'], label: 'a' },
+        { id: '7', formula: 'Q', rule: 'assumption', refs: [], label: 'b' },
+        { id: '8', formula: 'S', rule: 'impl_elim', refs: ['3', '7'] },
+        { id: '9', formula: 'Q -> S', rule: 'impl_intro', refs: ['8'], label: 'b' },
+        { id: '10', formula: 'R', rule: 'or_elim', refs: ['1', '6', '9'], branches: ['a', 'b'] }
+      ]
+    });
+
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('两支推出相同结论');
+  });
+
+  it('拒绝填写的两支标签与引用实际关闭的假设不一致', () => {
+    const proof = closedBranchProof();
+    proof.steps[9] = {
+      id: '10',
+      formula: 'R',
+      rule: 'or_elim',
+      refs: ['1', '6', '9'],
+      branches: ['b', 'a']
+    };
+    const result = verifyProof(proof);
+    expect(result.code).toBe('OR_ELIM_BRANCH_LABEL');
+    expect(result.error).toContain('不一致');
+  });
+
+  it('拒绝引用仍在开启（未关闭）的分支假设', () => {
+    const result = verifyProof({
+      premises: ['P | Q', 'P -> R', 'Q -> R'],
+      conclusion: 'R',
+      steps: [
+        { id: '1', formula: 'P | Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'P -> R', rule: 'premise', refs: [] },
+        { id: '3', formula: 'Q -> R', rule: 'premise', refs: [] },
+        { id: '4', formula: 'P', rule: 'assumption', refs: [], label: 'a' },
+        { id: '5', formula: 'R', rule: 'impl_elim', refs: ['2', '4'] },
+        { id: '6', formula: 'Q', rule: 'assumption', refs: [], label: 'b' },
+        { id: '7', formula: 'R', rule: 'impl_elim', refs: ['3', '6'] },
+        { id: '8', formula: 'R', rule: 'or_elim', refs: ['1', '2', '3'] }
+      ]
+    });
+
+    expect(result.code).toBe('OR_ELIM_REQUIRES_CLOSED_BRANCH');
+  });
+});
+
 describe('结构等价', () => {
   it('不同空格和括号但同结构的公式等价', () => {
     expect(sameFormula(parseFormula('P&(!Q)'), parseFormula('P & !Q'))).toBe(true);
