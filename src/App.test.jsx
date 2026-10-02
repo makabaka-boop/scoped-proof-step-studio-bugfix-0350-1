@@ -108,4 +108,30 @@ describe('React 编辑与后端结果归属', () => {
     expect(payload.premises).toEqual(['P']);
     expect(payload.steps[3].formula).toBe('Q');
   });
+
+  it('载入析取消去例后，步骤编号与引用保持一致并完整提交', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: '载入析取消去例' }));
+    fireEvent.click(screen.getByRole('button', { name: '提交后端验算' }));
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    const payload = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(payload.premises).toEqual(['A | B', 'A -> Q', 'B -> Q']);
+    expect(payload.conclusion).toBe('Q');
+    expect(payload.steps).toHaveLength(10);
+
+    const ids = payload.steps.map((step) => step.id);
+    expect(ids).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
+
+    const orElim = payload.steps.at(-1);
+    expect(orElim).toMatchObject({ rule: 'or_elim', refs: ['1', '6', '9'] });
+    for (const step of payload.steps) {
+      for (const ref of step.refs) {
+        expect(ids).toContain(ref);
+      }
+    }
+    expect(payload.steps[5]).toMatchObject({ rule: 'impl_intro', label: 'ha' });
+    expect(payload.steps[8]).toMatchObject({ rule: 'impl_intro', label: 'hb' });
+  });
 });

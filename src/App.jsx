@@ -35,6 +35,23 @@ const implicationExample = {
   ]
 };
 
+const disjunctionExample = {
+  premises: ['A | B', 'A -> Q', 'B -> Q'],
+  conclusion: 'Q',
+  steps: [
+    { id: '1', formula: 'A | B', rule: 'premise', refs: [], label: '' },
+    { id: '2', formula: 'A -> Q', rule: 'premise', refs: [], label: '' },
+    { id: '3', formula: 'B -> Q', rule: 'premise', refs: [], label: '' },
+    { id: '4', formula: 'A', rule: 'assumption', refs: [], label: 'ha' },
+    { id: '5', formula: 'Q', rule: 'impl_elim', refs: ['2', '4'], label: '' },
+    { id: '6', formula: 'A -> Q', rule: 'impl_intro', refs: ['5'], label: 'ha' },
+    { id: '7', formula: 'B', rule: 'assumption', refs: [], label: 'hb' },
+    { id: '8', formula: 'Q', rule: 'impl_elim', refs: ['3', '7'], label: '' },
+    { id: '9', formula: 'B -> Q', rule: 'impl_intro', refs: ['8'], label: 'hb' },
+    { id: '10', formula: 'Q', rule: 'or_elim', refs: ['1', '6', '9'], label: '' }
+  ]
+};
+
 const emptyStep = (index) => ({
   id: String(index + 1),
   formula: '',
@@ -121,7 +138,7 @@ export default function App() {
   function loadExample(nextExample) {
     setPremises(nextExample.premises);
     setConclusion(nextExample.conclusion);
-    setSteps(nextExample.steps.map((step) => ({ ...normalizeStep(step), id: uid() })));
+    setSteps(nextExample.steps.map(normalizeStep));
     setResult(null);
   }
 
@@ -167,6 +184,9 @@ export default function App() {
           <button type="button" onClick={() => loadExample(example)}>载入合取消去例</button>
           <button type="button" className="secondary" onClick={() => loadExample(implicationExample)}>
             载入蕴含引入例
+          </button>
+          <button type="button" className="secondary" onClick={() => loadExample(disjunctionExample)}>
+            载入析取消去例
           </button>
         </div>
       </section>

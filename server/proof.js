@@ -134,8 +134,11 @@ function ruleBasis(rule, step, records) {
       return `蕴含消去（肯定前件），引用 ${step.refs.map(referenced).join('、')}`;
     case 'impl_intro':
       return `蕴含引入，关闭假设 ${step.label}，引用 ${step.refs.map(referenced).join('、')}`;
-    case 'or_elim':
-      return `析取消去，引用 ${step.refs.map(referenced).join('、')}`;
+    case 'or_elim': {
+      const leftLabel = records.get(step.refs[1])?.closedLabel ?? '未知分支';
+      const rightLabel = records.get(step.refs[2])?.closedLabel ?? '未知分支';
+      return `析取消去，引用 ${step.refs.map(referenced).join('、')}，左支由关闭假设 ${leftLabel} 得到，右支由关闭假设 ${rightLabel} 得到`;
+    }
     default:
       return RULE_LABELS[rule] || rule;
   }
@@ -219,6 +222,10 @@ function verifyParsedProof(parsed, semantics) {
     throw new ProofFailure(failure(code, error, extra));
   }
 
+  function fail(result) {
+    throw new ProofFailure(result);
+  }
+
   const { premises, conclusion, steps } = parsed;
   const records = new Map();
   const openFrames = [];
@@ -284,11 +291,11 @@ function verifyParsedProof(parsed, semantics) {
       });
     } else if (step.rule === 'and_intro') {
       const countError = assertRefCount(step, 2);
-      if (countError) return countError;
+      if (countError) fail(countError);
       const refs = [];
       for (const refId of step.refs) {
         const result = getVisibleRecord(step, refId, records, currentScope);
-        if (result.error) return result.error;
+        if (result.error) fail(result.error);
         refs.push(result.record);
       }
       const expected = { type: 'and', left: refs[0].ast, right: refs[1].ast };
@@ -302,9 +309,9 @@ function verifyParsedProof(parsed, semantics) {
       records.set(step.id, { ast: step.ast, scopePath: currentScope, rule: step.rule });
     } else if (step.rule === 'and_elim') {
       const countError = assertRefCount(step, 1);
-      if (countError) return countError;
+      if (countError) fail(countError);
       const result = getVisibleRecord(step, step.refs[0], records, currentScope);
-      if (result.error) return result.error;
+      if (result.error) fail(result.error);
       const source = result.record.ast;
       if (source.type !== 'and') {
         reject(
@@ -323,11 +330,11 @@ function verifyParsedProof(parsed, semantics) {
       records.set(step.id, { ast: step.ast, scopePath: currentScope, rule: step.rule });
     } else if (step.rule === 'impl_elim') {
       const countError = assertRefCount(step, 2);
-      if (countError) return countError;
+      if (countError) fail(countError);
       const implicationResult = getVisibleRecord(step, step.refs[0], records, currentScope);
-      if (implicationResult.error) return implicationResult.error;
+      if (implicationResult.error) fail(implicationResult.error);
       const antecedentResult = getVisibleRecord(step, step.refs[1], records, currentScope);
-      if (antecedentResult.error) return antecedentResult.error;
+      if (antecedentResult.error) fail(antecedentResult.error);
 
       const implication = implicationResult.record.ast;
       const antecedent = antecedentResult.record.ast;
@@ -355,27 +362,73 @@ function verifyParsedProof(parsed, semantics) {
       records.set(step.id, { ast: step.ast, scopePath: currentScope, rule: step.rule });
     } else if (step.rule === 'or_elim') {
       const countError = assertRefCount(step, 3);
-      if (countError) return countError;
+      if (countError) fail(countError);
       const refs = [];
       for (const refId of step.refs) {
         const result = getVisibleRecord(step, refId, records, currentScope);
-        if (result.error) return result.error;
+        if (result.error) fail(result.error);
         refs.push(result.record);
       }
       const disjunction = refs[0].ast;
-      const leftCase = refs[1].ast;
-      const rightCase = refs[2].ast;
-      if (disjunction.type !== 'or' || leftCase.type !== 'implies' || rightCase.type !== 'implies' ||
-          !sameFormula(disjunction.left, leftCase.left) ||
-          !sameFormula(disjunction.right, rightCase.left) ||
-          !sameFormula(leftCase.right, rightCase.right) ||
-          !sameFormula(step.ast, leftCase.right)) {
-        reject('INVALID_OR_ELIM', `步骤 ${step.id}：析取消去的两支结论不一致`, { stepId: step.id });
+      const leftBranch = refs[1];
+      const rightBranch = refs[2];
+      if (disjunction.type !== 'or') {
+        reject(
+          'INVALID_OR_ELIM',
+          `步骤 ${step.id}：析取消去的第一个引用必须是析取式，但实际是 ${formatFormula(disjunction)}`,
+          { stepId: step.id }
+        );
       }
-      records.set(step.id, { ast: step.ast, scopePath: [], rule: step.rule });
+      for (const [position, record] of [[2, leftBranch], [3, rightBranch]]) {
+        if (record.rule !== 'impl_intro') {
+          reject(
+            'INVALID_OR_ELIM',
+            `步骤 ${step.id}：析取消去的第 ${position} 个引用必须是关闭假设分支后得到的蕴含式（蕴含引入步骤），但“${step.refs[position - 1]}”是${RULE_LABELS[record.rule]}步骤`,
+            { stepId: step.id }
+          );
+        }
+      }
+      if (leftBranch.closedLabel === rightBranch.closedLabel) {
+        reject(
+          'INVALID_OR_ELIM',
+          `步骤 ${step.id}：析取消去需要两个不同的已关闭假设分支，但两处引用都来自分支“${leftBranch.closedLabel}”`,
+          { stepId: step.id }
+        );
+      }
+      const leftCase = leftBranch.ast;
+      const rightCase = rightBranch.ast;
+      if (!sameFormula(disjunction.left, leftCase.left)) {
+        reject(
+          'INVALID_OR_ELIM',
+          `步骤 ${step.id}：左分支 ${formatFormula(leftCase)} 的前件应与析取式左支 ${formatFormula(disjunction.left)} 一致（引用顺序：析取式、左分支、右分支）`,
+          { stepId: step.id }
+        );
+      }
+      if (!sameFormula(disjunction.right, rightCase.left)) {
+        reject(
+          'INVALID_OR_ELIM',
+          `步骤 ${step.id}：右分支 ${formatFormula(rightCase)} 的前件应与析取式右支 ${formatFormula(disjunction.right)} 一致`,
+          { stepId: step.id }
+        );
+      }
+      if (!sameFormula(leftCase.right, rightCase.right)) {
+        reject(
+          'INVALID_OR_ELIM',
+          `步骤 ${step.id}：析取消去的两支结论不一致：左分支得到 ${formatFormula(leftCase.right)}，右分支得到 ${formatFormula(rightCase.right)}`,
+          { stepId: step.id }
+        );
+      }
+      if (!sameFormula(step.ast, leftCase.right)) {
+        reject(
+          'INVALID_OR_ELIM',
+          `步骤 ${step.id}：析取消去应得到两支的共同结论 ${formatFormula(leftCase.right)}，实际写成 ${formatFormula(step.ast)}`,
+          { stepId: step.id }
+        );
+      }
+      records.set(step.id, { ast: step.ast, scopePath: currentScope, rule: step.rule });
     } else if (step.rule === 'impl_intro') {
       const countError = assertRefCount(step, 1);
-      if (countError) return countError;
+      if (countError) fail(countError);
       if (!step.label.trim()) {
         reject(
           'MISSING_LABEL',
@@ -403,7 +456,7 @@ function verifyParsedProof(parsed, semantics) {
       const frame = openFrames[frameIndex];
       const innerScope = [...currentScope];
       const refResult = getVisibleRecord(step, step.refs[0], records, innerScope);
-      if (refResult.error) return refResult.error;
+      if (refResult.error) fail(refResult.error);
       const referencedRecord = refResult.record;
       if (referencedRecord.scopePath.length !== innerScope.length) {
         reject(
@@ -426,15 +479,14 @@ function verifyParsedProof(parsed, semantics) {
         );
       }
 
-      const newRecord = {
+      openFrames.pop();
+      closedLabels.add(step.label);
+      records.set(step.id, {
         ast: step.ast,
         scopePath: openFrames.map((item) => item.label),
         rule: step.rule,
         closedLabel: step.label
-      };
-      openFrames.pop();
-      closedLabels.add(step.label);
-      records.set(step.id, newRecord);
+      });
     }
 
     derivations.push({

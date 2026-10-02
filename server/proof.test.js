@@ -267,6 +267,242 @@ describe('错误消去与第一处错误', () => {
   });
 });
 
+describe('析取消去（两个已关闭的假设分支）', () => {
+  const closedBranchSteps = [
+    { id: '1', formula: 'A | B', rule: 'premise', refs: [] },
+    { id: '2', formula: 'A -> Q', rule: 'premise', refs: [] },
+    { id: '3', formula: 'B -> Q', rule: 'premise', refs: [] },
+    { id: '4', formula: 'A', rule: 'assumption', refs: [], label: 'ha' },
+    { id: '5', formula: 'Q', rule: 'impl_elim', refs: ['2', '4'] },
+    { id: '6', formula: 'A -> Q', rule: 'impl_intro', refs: ['5'], label: 'ha' },
+    { id: '7', formula: 'B', rule: 'assumption', refs: [], label: 'hb' },
+    { id: '8', formula: 'Q', rule: 'impl_elim', refs: ['3', '7'] },
+    { id: '9', formula: 'B -> Q', rule: 'impl_intro', refs: ['8'], label: 'hb' }
+  ];
+
+  it('接受用两个已关闭假设分支完成的析取消去，并在依据中记录分支标签', () => {
+    const result = verifyProof({
+      premises: ['A | B', 'A -> Q', 'B -> Q'],
+      conclusion: 'Q',
+      steps: [
+        ...closedBranchSteps,
+        { id: '10', formula: 'Q', rule: 'or_elim', refs: ['1', '6', '9'] }
+      ]
+    });
+
+    expect(result).toMatchObject({ ok: true, valid: true, code: 'VALID_PROOF' });
+    const basis = result.derivations.at(-1).basis;
+    expect(basis).toContain('析取消去');
+    expect(basis).toContain('关闭假设 ha');
+    expect(basis).toContain('关闭假设 hb');
+  });
+
+  it('拒绝把未由分支关闭得到的普通蕴含前提当成两支证明', () => {
+    const result = verifyProof({
+      premises: ['A | B', 'A -> Q', 'B -> Q'],
+      conclusion: 'Q',
+      steps: [
+        { id: '1', formula: 'A | B', rule: 'premise', refs: [] },
+        { id: '2', formula: 'A -> Q', rule: 'premise', refs: [] },
+        { id: '3', formula: 'B -> Q', rule: 'premise', refs: [] },
+        { id: '4', formula: 'Q', rule: 'or_elim', refs: ['1', '2', '3'] }
+      ]
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('步骤 4');
+    expect(result.error).toContain('蕴含引入');
+  });
+
+  it('拒绝把同一个已关闭分支同时当成左右两支', () => {
+    const result = verifyProof({
+      premises: ['A | A', 'A -> Q'],
+      conclusion: 'Q',
+      steps: [
+        { id: '1', formula: 'A | A', rule: 'premise', refs: [] },
+        { id: '2', formula: 'A -> Q', rule: 'premise', refs: [] },
+        { id: '3', formula: 'A', rule: 'assumption', refs: [], label: 'ha' },
+        { id: '4', formula: 'Q', rule: 'impl_elim', refs: ['2', '3'] },
+        { id: '5', formula: 'A -> Q', rule: 'impl_intro', refs: ['4'], label: 'ha' },
+        { id: '6', formula: 'Q', rule: 'or_elim', refs: ['1', '5', '5'] }
+      ]
+    });
+
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('两个不同的已关闭假设分支');
+  });
+
+  it('拒绝左右分支引用顺序颠倒', () => {
+    const result = verifyProof({
+      premises: ['A | B', 'A -> Q', 'B -> Q'],
+      conclusion: 'Q',
+      steps: [
+        ...closedBranchSteps,
+        { id: '10', formula: 'Q', rule: 'or_elim', refs: ['1', '9', '6'] }
+      ]
+    });
+
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('左分支');
+  });
+
+  it('拒绝两支结论不一致的析取消去', () => {
+    const result = verifyProof({
+      premises: ['A | B', 'A -> Q', 'B -> R'],
+      conclusion: 'Q',
+      steps: [
+        { id: '1', formula: 'A | B', rule: 'premise', refs: [] },
+        { id: '2', formula: 'A -> Q', rule: 'premise', refs: [] },
+        { id: '3', formula: 'B -> R', rule: 'premise', refs: [] },
+        { id: '4', formula: 'A', rule: 'assumption', refs: [], label: 'ha' },
+        { id: '5', formula: 'Q', rule: 'impl_elim', refs: ['2', '4'] },
+        { id: '6', formula: 'A -> Q', rule: 'impl_intro', refs: ['5'], label: 'ha' },
+        { id: '7', formula: 'B', rule: 'assumption', refs: [], label: 'hb' },
+        { id: '8', formula: 'R', rule: 'impl_elim', refs: ['3', '7'] },
+        { id: '9', formula: 'B -> R', rule: 'impl_intro', refs: ['8'], label: 'hb' },
+        { id: '10', formula: 'Q', rule: 'or_elim', refs: ['1', '6', '9'] }
+      ]
+    });
+
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('两支结论不一致');
+  });
+
+  it('拒绝第一个引用不是析取式的析取消去', () => {
+    const result = verifyProof({
+      premises: ['A | B', 'A -> Q', 'B -> Q'],
+      conclusion: 'Q',
+      steps: [
+        ...closedBranchSteps,
+        { id: '10', formula: 'Q', rule: 'or_elim', refs: ['2', '6', '9'] }
+      ]
+    });
+
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('第一个引用必须是析取式');
+  });
+
+  it('外层假设仍开启时得到的析取结论，关闭外层后不得继续引用；语义反例一并返回', () => {
+    const result = verifyProof({
+      premises: ['A | B'],
+      conclusion: 'Q',
+      steps: [
+        { id: '1', formula: 'A | B', rule: 'premise', refs: [] },
+        { id: '2', formula: 'Q', rule: 'assumption', refs: [], label: 'h1' },
+        { id: '3', formula: 'A', rule: 'assumption', refs: [], label: 'ha' },
+        { id: '4', formula: 'Q & Q', rule: 'and_intro', refs: ['2', '2'] },
+        { id: '5', formula: 'Q', rule: 'and_elim', refs: ['4'] },
+        { id: '6', formula: 'A -> Q', rule: 'impl_intro', refs: ['5'], label: 'ha' },
+        { id: '7', formula: 'B', rule: 'assumption', refs: [], label: 'hb' },
+        { id: '8', formula: 'Q & Q', rule: 'and_intro', refs: ['2', '2'] },
+        { id: '9', formula: 'Q', rule: 'and_elim', refs: ['8'] },
+        { id: '10', formula: 'B -> Q', rule: 'impl_intro', refs: ['9'], label: 'hb' },
+        { id: '11', formula: 'Q', rule: 'or_elim', refs: ['1', '6', '10'] },
+        { id: '12', formula: 'Q -> Q', rule: 'impl_intro', refs: ['11'], label: 'h1' },
+        { id: '13', formula: 'Q', rule: 'impl_elim', refs: ['12', '11'] }
+      ]
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe('SCOPE_VIOLATION');
+    expect(result.stepId).toBe('13');
+    expect(result.error).toContain('已关闭假设');
+    expect(result.semantics.entailed).toBe(false);
+    expect(result.semantics.counterexamples).toContainEqual({ A: true, B: false, Q: false });
+  });
+
+  it('接受析取结论留在外层假设内、由蕴含引入正确关闭外层的嵌套证明', () => {
+    const result = verifyProof({
+      premises: ['A | B', 'A -> Q', 'B -> Q'],
+      conclusion: 'P -> Q',
+      steps: [
+        { id: '1', formula: 'A | B', rule: 'premise', refs: [] },
+        { id: '2', formula: 'A -> Q', rule: 'premise', refs: [] },
+        { id: '3', formula: 'B -> Q', rule: 'premise', refs: [] },
+        { id: '4', formula: 'P', rule: 'assumption', refs: [], label: 'h1' },
+        { id: '5', formula: 'A', rule: 'assumption', refs: [], label: 'ha' },
+        { id: '6', formula: 'Q', rule: 'impl_elim', refs: ['2', '5'] },
+        { id: '7', formula: 'A -> Q', rule: 'impl_intro', refs: ['6'], label: 'ha' },
+        { id: '8', formula: 'B', rule: 'assumption', refs: [], label: 'hb' },
+        { id: '9', formula: 'Q', rule: 'impl_elim', refs: ['3', '8'] },
+        { id: '10', formula: 'B -> Q', rule: 'impl_intro', refs: ['9'], label: 'hb' },
+        { id: '11', formula: 'Q', rule: 'or_elim', refs: ['1', '7', '10'] },
+        { id: '12', formula: 'P -> Q', rule: 'impl_intro', refs: ['11'], label: 'h1' }
+      ]
+    });
+
+    expect(result).toMatchObject({ ok: true, valid: true, code: 'VALID_PROOF' });
+  });
+
+  it('拒绝析取消去结论与两支共同结论不符', () => {
+    const result = verifyProof({
+      premises: ['A | B', 'A -> Q', 'B -> Q'],
+      conclusion: 'Q',
+      steps: [
+        ...closedBranchSteps,
+        { id: '10', formula: 'A', rule: 'or_elim', refs: ['1', '6', '9'] },
+        { id: '11', formula: 'Q', rule: 'premise', refs: [] }
+      ]
+    });
+
+    expect(result.code).toBe('INVALID_OR_ELIM');
+    expect(result.error).toContain('共同结论');
+  });
+});
+
+describe('嵌套假设与关闭后引用', () => {
+  it('接受嵌套蕴含引入 P -> (Q -> P)', () => {
+    const result = verifyProof({
+      premises: [],
+      conclusion: 'P -> (Q -> P)',
+      steps: [
+        { id: '1', formula: 'P', rule: 'assumption', refs: [], label: 'h1' },
+        { id: '2', formula: 'Q', rule: 'assumption', refs: [], label: 'h2' },
+        { id: '3', formula: 'P & P', rule: 'and_intro', refs: ['1', '1'] },
+        { id: '4', formula: 'P', rule: 'and_elim', refs: ['3'] },
+        { id: '5', formula: 'Q -> P', rule: 'impl_intro', refs: ['4'], label: 'h2' },
+        { id: '6', formula: 'P -> (Q -> P)', rule: 'impl_intro', refs: ['5'], label: 'h1' }
+      ]
+    });
+
+    expect(result).toMatchObject({ ok: true, valid: true, code: 'VALID_PROOF' });
+  });
+
+  it('蕴含引入关闭假设后，其结论仍可在当前作用域被后续步骤引用', () => {
+    const result = verifyProof({
+      premises: [],
+      conclusion: '(P -> P) & (Q -> Q)',
+      steps: [
+        { id: '1', formula: 'P', rule: 'assumption', refs: [], label: 'h1' },
+        { id: '2', formula: 'P -> P', rule: 'impl_intro', refs: ['1'], label: 'h1' },
+        { id: '3', formula: 'Q', rule: 'assumption', refs: [], label: 'h2' },
+        { id: '4', formula: 'Q -> Q', rule: 'impl_intro', refs: ['3'], label: 'h2' },
+        { id: '5', formula: '(P -> P) & (Q -> Q)', rule: 'and_intro', refs: ['2', '4'] }
+      ]
+    });
+
+    expect(result).toMatchObject({ ok: true, valid: true, code: 'VALID_PROOF' });
+  });
+
+  it('引用定位类错误同样携带独立语义检查结果', () => {
+    const result = verifyProof({
+      premises: ['P -> Q'],
+      conclusion: 'Q',
+      steps: [
+        { id: '1', formula: 'P -> Q', rule: 'premise', refs: [] },
+        { id: '2', formula: 'Q', rule: 'impl_elim', refs: ['1', '9'] }
+      ]
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe('UNKNOWN_REFERENCE');
+    expect(result.stepId).toBe('2');
+    expect(result.semantics.entailed).toBe(false);
+    expect(result.semantics.counterexamples).toEqual([{ P: false, Q: false }]);
+  });
+});
+
 describe('结构等价', () => {
   it('不同空格和括号但同结构的公式等价', () => {
     expect(sameFormula(parseFormula('P&(!Q)'), parseFormula('P & !Q'))).toBe(true);
